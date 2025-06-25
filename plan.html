@@ -1163,12 +1163,137 @@
         }
 
         function selectPipe(pipeId) {
+            const pipeEl = document.getElementById(`pipe-${pipeId}`);
+            if (!pipeEl) return;
+
             if (currentTool === 'select') {
                 document.querySelectorAll('.pipe').forEach(p => p.classList.remove('selected'));
-                const pipeEl = document.getElementById(`pipe-${pipeId}`);
-                if (pipeEl) pipeEl.classList.add('selected');
+                pipeEl.classList.add('selected');
                 selectedPipes = [pipeId];
+            } else if (currentTool === 'pipe') {
+                if (selectedPipes.includes(pipeId)) {
+                    pipeEl.classList.remove('selected');
+                    selectedPipes = selectedPipes.filter(id => id !== pipeId);
+                } else {
+                    selectedPipes.push(pipeId);
+                    pipeEl.classList.add('selected');
+                }
+
+                if (selectedPipes.length === 2) {
+                    createTeeFromPipes(selectedPipes[0], selectedPipes[1]);
+                    document.querySelectorAll('.pipe').forEach(p => p.classList.remove('selected'));
+                    selectedPipes = [];
+                }
             }
+        }
+
+        function getPipeCoords(pipe) {
+            const startEq = equipment.find(e => e.id === pipe.startEquipment);
+            const endEq = equipment.find(e => e.id === pipe.endEquipment);
+            if (!startEq || !endEq) return null;
+            const startPos = getConnectionPosition(startEq, pipe.startSide);
+            const endPos = getConnectionPosition(endEq, pipe.endSide);
+            return { x1: startPos.x, y1: startPos.y, x2: endPos.x, y2: endPos.y };
+        }
+
+        function getPipesIntersection(p1, p2) {
+            const a = getPipeCoords(p1);
+            const b = getPipeCoords(p2);
+            if (!a || !b) return null;
+            const denom = (a.x1 - a.x2) * (b.y1 - b.y2) - (a.y1 - a.y2) * (b.x1 - b.x2);
+            if (denom === 0) return null;
+            const t = ((a.x1 - b.x1) * (b.y1 - b.y2) - (a.y1 - b.y1) * (b.x1 - b.x2)) / denom;
+            const u = ((a.x1 - b.x1) * (a.y1 - a.y2) - (a.y1 - b.y1) * (a.x1 - a.x2)) / denom;
+            if (t >= 0 && t <= 1 && u >= 0 && u <= 1) {
+                return { x: a.x1 + t * (a.x2 - a.x1), y: a.y1 + t * (a.y2 - a.y1) };
+            }
+            return null;
+        }
+
+        function vectorToSide(dx, dy) {
+            const adx = Math.abs(dx);
+            const ady = Math.abs(dy);
+            if (adx >= ady) {
+                return dx > 0 ? 'right' : 'left';
+            } else {
+                return dy > 0 ? 'bottom' : 'top';
+            }
+        }
+
+        function createPipeSegment(start, end, original) {
+            const startPos = getConnectionPosition(start.eq, start.side);
+            const endPos = getConnectionPosition(end.eq, end.side);
+            const length = Math.sqrt((endPos.x - startPos.x) ** 2 + (endPos.y - startPos.y) ** 2) / scale;
+
+            const pipe = {
+                id: Date.now() + Math.random(),
+                startEquipment: start.equipmentId,
+                endEquipment: end.equipmentId,
+                startSide: start.side,
+                endSide: end.side,
+                diameter: original.diameter,
+                type: original.type,
+                material: original.material,
+                pressure: original.pressure,
+                length: length,
+                flow: original.flow,
+                velocity: original.velocity,
+                pressureLoss: original.pressureLoss
+            };
+
+            pipes.push(pipe);
+            drawPipe(pipe);
+        }
+
+        function createTeeFromPipes(id1, id2) {
+            const pipe1 = pipes.find(p => p.id === id1);
+            const pipe2 = pipes.find(p => p.id === id2);
+            if (!pipe1 || !pipe2) return;
+
+            const intersection = getPipesIntersection(pipe1, pipe2);
+            if (!intersection) return;
+
+            const teeWidthMm = 100;
+            const teeDepthMm = 100;
+            const tee = {
+                id: Date.now(),
+                type: 'tee',
+                name: 'T',
+                x: intersection.x - ((teeWidthMm / 1000) * scale) / 2,
+                y: intersection.y - ((teeDepthMm / 1000) * scale) / 2,
+                width: (teeWidthMm / 1000) * scale,
+                height: (teeDepthMm / 1000) * scale,
+                widthMm: teeWidthMm,
+                depthMm: teeDepthMm,
+                rotation: 0,
+                connectionSides: ['left', 'right', 'top', 'bottom'],
+                connections: []
+            };
+
+            equipment.push(tee);
+            createEquipmentElement(tee);
+
+            removePipe(id1);
+            removePipe(id2);
+
+            const start1 = { equipmentId: pipe1.startEquipment, side: pipe1.startSide, eq: equipment.find(e => e.id === pipe1.startEquipment) };
+            const end1 = { equipmentId: pipe1.endEquipment, side: pipe1.endSide, eq: equipment.find(e => e.id === pipe1.endEquipment) };
+            const start2 = { equipmentId: pipe2.startEquipment, side: pipe2.startSide, eq: equipment.find(e => e.id === pipe2.startEquipment) };
+            const end2 = { equipmentId: pipe2.endEquipment, side: pipe2.endSide, eq: equipment.find(e => e.id === pipe2.endEquipment) };
+
+            const start1Side = vectorToSide(intersection.x - getConnectionPosition(start1.eq, start1.side).x, intersection.y - getConnectionPosition(start1.eq, start1.side).y);
+            const end1Side = vectorToSide(getConnectionPosition(end1.eq, end1.side).x - intersection.x, getConnectionPosition(end1.eq, end1.side).y - intersection.y);
+            const start2Side = vectorToSide(intersection.x - getConnectionPosition(start2.eq, start2.side).x, intersection.y - getConnectionPosition(start2.eq, start2.side).y);
+            const end2Side = vectorToSide(getConnectionPosition(end2.eq, end2.side).x - intersection.x, getConnectionPosition(end2.eq, end2.side).y - intersection.y);
+
+            createPipeSegment(start1, { equipmentId: tee.id, side: start1Side, eq: tee }, pipe1);
+            createPipeSegment({ equipmentId: tee.id, side: end1Side, eq: tee }, end1, pipe1);
+            createPipeSegment(start2, { equipmentId: tee.id, side: start2Side, eq: tee }, pipe2);
+            createPipeSegment({ equipmentId: tee.id, side: end2Side, eq: tee }, end2, pipe2);
+
+            updateEquipmentList();
+            updatePipesList();
+            updateCalculations();
         }
 
         function redrawPipesForEquipment(equipmentId) {
