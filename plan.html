@@ -593,6 +593,9 @@
         let zoom = 1;
         let currentTool = 'select';
         let pipeStart = null;
+        let pipePoints = [];
+        let previewSegments = [];
+        let previewLine = null;
 
         // Projet
         let project = {
@@ -645,8 +648,15 @@
             selectedEquipment = [];
             selectedWallPoint = null;
             removeWallPointVisual();
-            document.querySelectorAll('.equipment-item').forEach(el => 
+            document.querySelectorAll('.equipment-item').forEach(el =>
                 el.classList.remove('selected'));
+
+            // Nettoyer l'aperçu de tuyauterie en cours
+            previewSegments.forEach(seg => seg.remove());
+            previewSegments = [];
+            if (previewLine) { previewLine.remove(); previewLine = null; }
+            pipeStart = null;
+            pipePoints = [];
             
             const toolNames = {
                 'select': 'Sélection',
@@ -1059,41 +1069,57 @@
         // Gestion de la tuyauterie
         function handleConnectionClick(equipmentId, side, event) {
             if (currentTool !== 'pipe') return;
-            
+
             const eq = equipment.find(e => e.id === equipmentId);
             if (!eq) return;
-            
+
             const statusText = document.getElementById('statusText');
-            
+
             if (!pipeStart) {
                 pipeStart = { equipmentId, side, eq };
-                if (statusText) statusText.textContent = 'Cliquez sur un autre point de connexion';
+                pipePoints = [];
+                previewSegments.forEach(seg => seg.remove());
+                previewSegments = [];
+                if (previewLine) { previewLine.remove(); previewLine = null; }
+                if (statusText) statusText.textContent = 'Cliquez pour ajouter des points ou terminer sur un autre équipement';
             } else {
                 if (pipeStart.equipmentId !== equipmentId) {
-                    createPipe(pipeStart, { equipmentId, side, eq });
+                    createPipeWithPoints(pipeStart, pipePoints, { equipmentId, side, eq });
                     if (statusText) statusText.textContent = 'Tuyau créé - Cliquez pour en créer un autre';
                 }
                 pipeStart = null;
+                pipePoints = [];
+                previewSegments.forEach(seg => seg.remove());
+                previewSegments = [];
+                if (previewLine) { previewLine.remove(); previewLine = null; }
             }
         }
 
-        function createPipe(start, end) {
+        function createPipeWithPoints(start, points, end) {
             const startPos = getConnectionPosition(start.eq, start.side);
             const endPos = getConnectionPosition(end.eq, end.side);
-            const length = Math.sqrt((endPos.x - startPos.x) ** 2 + (endPos.y - startPos.y) ** 2) / scale;
-            
+            const allPts = [startPos, ...points, endPos];
+
+            let length = 0;
+            for (let i = 0; i < allPts.length - 1; i++) {
+                const dx = allPts[i + 1].x - allPts[i].x;
+                const dy = allPts[i + 1].y - allPts[i].y;
+                length += Math.sqrt(dx * dx + dy * dy) / scale;
+            }
+
             const compressorFlow = getCompressorFlow();
             const material = document.getElementById('pipeMaterial').value;
             const pressure = parseInt(document.getElementById('pipePressure').value);
-            
+
             const recommendation = calculatePipeDiameter(compressorFlow, length, material, pressure);
-            
+
             const pipe = {
                 id: Date.now(),
                 startEquipment: start.equipmentId,
                 endEquipment: end.equipmentId,
                 startSide: start.side,
                 endSide: end.side,
+                points: points,
                 diameter: recommendation.diameter,
                 type: document.getElementById('pipeType').value,
                 material: material,
@@ -1103,15 +1129,15 @@
                 velocity: recommendation.velocity,
                 pressureLoss: recommendation.pressureLoss
             };
-            
+
             pipes.push(pipe);
             drawPipe(pipe);
             updatePipesList();
             updateCalculations();
-            
+
             const recommendationTextEl = document.getElementById('recommendationText');
             if (recommendationTextEl) {
-                recommendationTextEl.innerHTML = 
+                recommendationTextEl.innerHTML =
                     `Ø${recommendation.diameter}mm ${material} - Vitesse: ${recommendation.velocity}m/s - Perte: ${recommendation.pressureLoss}mbar/100m`;
             }
         }
@@ -1158,32 +1184,36 @@
         function drawPipe(pipe) {
             const startEq = equipment.find(e => e.id === pipe.startEquipment);
             const endEq = equipment.find(e => e.id === pipe.endEquipment);
-            
+
             if (!startEq || !endEq) return;
-            
+
             const startPos = getConnectionPosition(startEq, pipe.startSide);
             const endPos = getConnectionPosition(endEq, pipe.endSide);
-            
-            const pipeElement = document.createElement('div');
-            pipeElement.className = 'pipe';
-            pipeElement.id = `pipe-${pipe.id}`;
-            
-            const length = Math.sqrt((endPos.x - startPos.x) ** 2 + (endPos.y - startPos.y) ** 2);
-            const angle = Math.atan2(endPos.y - startPos.y, endPos.x - startPos.x);
-            
-            pipeElement.style.left = startPos.x + 'px';
-            pipeElement.style.top = startPos.y + 'px';
-            pipeElement.style.width = length + 'px';
-            pipeElement.style.height = Math.max(2, pipe.diameter / 10) + 'px';
-            pipeElement.style.transform = `rotate(${angle}rad)`;
-            pipeElement.style.transformOrigin = '0 50%';
-            pipeElement.style.backgroundColor = pipe.type === 'air' ? '#2d3748' : '#e53e3e';
-            
-            pipeElement.addEventListener('click', function() {
-                selectPipe(pipe.id);
-            });
-            
-            canvasContainer.appendChild(pipeElement);
+
+            const points = [startPos, ...(pipe.points || []), endPos];
+            for (let i = 0; i < points.length - 1; i++) {
+                const p1 = points[i];
+                const p2 = points[i + 1];
+                const seg = document.createElement('div');
+                seg.className = 'pipe';
+                seg.id = `pipe-${pipe.id}-seg-${i}`;
+                seg.dataset.pipeId = pipe.id;
+
+                const length = Math.sqrt((p2.x - p1.x) ** 2 + (p2.y - p1.y) ** 2);
+                const angle = Math.atan2(p2.y - p1.y, p2.x - p1.x);
+
+                seg.style.left = p1.x + 'px';
+                seg.style.top = p1.y + 'px';
+                seg.style.width = length + 'px';
+                seg.style.height = Math.max(2, pipe.diameter / 10) + 'px';
+                seg.style.transform = `rotate(${angle}rad)`;
+                seg.style.transformOrigin = '0 50%';
+                seg.style.backgroundColor = pipe.type === 'air' ? '#2d3748' : '#e53e3e';
+
+                seg.addEventListener('click', function() { selectPipe(pipe.id); });
+
+                canvasContainer.appendChild(seg);
+            }
         }
 
         function selectPipe(pipeId) {
@@ -1192,7 +1222,7 @@
 
             if (currentTool === 'select') {
                 document.querySelectorAll('.pipe').forEach(p => p.classList.remove('selected'));
-                pipeEl.classList.add('selected');
+
                 selectedPipes = [pipeId];
             } else if (currentTool === 'pipe') {
                 if (selectedPipes.includes(pipeId)) {
@@ -1323,8 +1353,7 @@
         function redrawPipesForEquipment(equipmentId) {
             pipes.forEach(pipe => {
                 if (pipe.startEquipment === equipmentId || pipe.endEquipment === equipmentId) {
-                    const element = document.getElementById(`pipe-${pipe.id}`);
-                    if (element) element.remove();
+                    document.querySelectorAll(`[data-pipe-id="${pipe.id}"]`).forEach(el => el.remove());
                     drawPipe(pipe);
                 }
             });
@@ -1425,6 +1454,34 @@
 
         // Gestion des clics sur le canvas pour sélectionner les murs
         function handleCanvasClick(e) {
+            if (currentTool === 'pipe') {
+                if (!pipeStart) return;
+
+                const rect = canvasContainer.getBoundingClientRect();
+                const x = e.clientX - rect.left;
+                const y = e.clientY - rect.top;
+
+                const last = pipePoints.length > 0 ? pipePoints[pipePoints.length - 1] : getConnectionPosition(pipeStart.eq, pipeStart.side);
+                const length = Math.sqrt((x - last.x) ** 2 + (y - last.y) ** 2);
+                const angle = Math.atan2(y - last.y, x - last.x);
+                const seg = document.createElement('div');
+                seg.className = 'pipe';
+                seg.style.left = last.x + 'px';
+                seg.style.top = last.y + 'px';
+                seg.style.width = length + 'px';
+                seg.style.height = '4px';
+                seg.style.transform = `rotate(${angle}rad)`;
+                seg.style.transformOrigin = '0 50%';
+                seg.style.backgroundColor = '#a0aec0';
+                seg.style.pointerEvents = 'none';
+                canvasContainer.appendChild(seg);
+                previewSegments.push(seg);
+
+                pipePoints.push({ x, y });
+                if (previewLine) { previewLine.remove(); previewLine = null; }
+                return;
+            }
+
             if (currentTool !== 'measure') return;
             
             const rect = canvasContainer.getBoundingClientRect();
@@ -1770,8 +1827,7 @@
             });
             
             pipes.forEach(pipe => {
-                const element = document.getElementById(`pipe-${pipe.id}`);
-                if (element) element.remove();
+                document.querySelectorAll(`[data-pipe-id="${pipe.id}"]`).forEach(el => el.remove());
                 drawPipe(pipe);
             });
         }
@@ -1798,8 +1854,7 @@
 
         function removePipe(id) {
             pipes = pipes.filter(pipe => pipe.id !== id);
-            const element = document.getElementById(`pipe-${id}`);
-            if (element) element.remove();
+            document.querySelectorAll(`[data-pipe-id="${id}"]`).forEach(el => el.remove());
             updatePipesList();
             updateCalculations();
         }
@@ -1983,6 +2038,33 @@
                     const mousePosElement = document.getElementById('mousePos');
                     if (mousePosElement) {
                         mousePosElement.textContent = `Position: ${x},${y} m`;
+                    }
+
+                    if (currentTool === 'pipe' && pipeStart) {
+                        const mouseX = e.clientX - rect.left;
+                        const mouseY = e.clientY - rect.top;
+                        const last = pipePoints.length > 0 ? pipePoints[pipePoints.length - 1] : getConnectionPosition(pipeStart.eq, pipeStart.side);
+
+                        if (!previewLine) {
+                            previewLine = document.createElement('div');
+                            previewLine.className = 'pipe';
+                            previewLine.style.backgroundColor = '#a0aec0';
+                            previewLine.style.opacity = '0.6';
+                            previewLine.style.pointerEvents = 'none';
+                            canvasContainer.appendChild(previewLine);
+                        }
+
+                        const l = Math.sqrt((mouseX - last.x) ** 2 + (mouseY - last.y) ** 2);
+                        const a = Math.atan2(mouseY - last.y, mouseX - last.x);
+                        previewLine.style.left = last.x + 'px';
+                        previewLine.style.top = last.y + 'px';
+                        previewLine.style.width = l + 'px';
+                        previewLine.style.height = '4px';
+                        previewLine.style.transform = `rotate(${a}rad)`;
+                        previewLine.style.transformOrigin = '0 50%';
+                    } else if (previewLine) {
+                        previewLine.remove();
+                        previewLine = null;
                     }
                 });
                 
