@@ -1117,18 +1117,42 @@
         }
 
         function getConnectionPosition(eq, side) {
-            const centerX = eq.x + eq.width / 2;
-            const centerY = eq.y + eq.height / 2;
-            
-            let x, y;
-            switch(side) {
-                case 'top': x = centerX; y = eq.y; break;
-                case 'right': x = eq.x + eq.width; y = centerY; break;
-                case 'bottom': x = centerX; y = eq.y + eq.height; break;
-                case 'left': x = eq.x; y = centerY; break;
+            const rotation = eq.rotation || 0;
+
+            let width = eq.width;
+            let height = eq.height;
+            if (rotation === 90 || rotation === 270) {
+                width = eq.height;
+                height = eq.width;
             }
-            
-            return { x, y };
+
+            const centerX = eq.x + width / 2;
+            const centerY = eq.y + height / 2;
+
+            let offsetX = 0, offsetY = 0;
+            switch (side) {
+                case 'top':
+                    offsetY = -height / 2;
+                    break;
+                case 'right':
+                    offsetX = width / 2;
+                    break;
+                case 'bottom':
+                    offsetY = height / 2;
+                    break;
+                case 'left':
+                    offsetX = -width / 2;
+                    break;
+            }
+
+            const rad = rotation * Math.PI / 180;
+            const rotatedX = offsetX * Math.cos(rad) - offsetY * Math.sin(rad);
+            const rotatedY = offsetX * Math.sin(rad) + offsetY * Math.cos(rad);
+
+            return {
+                x: centerX + rotatedX,
+                y: centerY + rotatedY
+            };
         }
 
         function drawPipe(pipe) {
